@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SolarFarm — GenAI Fault Dashboard</title>
+
+  <style>
+    :root{
+      --bg:#0f1724; --card:#0b1220; --muted:#94a3b8; --accent:#ffb020; --accent-2:#22c55e;
+      --glass: rgba(255,255,255,0.04);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#071029 0%, #071a2a 60%);color:#e6eef8;}
+    .app{max-width:1200px;margin:24px auto;padding:20px}
+
+    header{display:flex;align-items:center;gap:16px;margin-bottom:18px}
+    .logo{width:56px;height:56px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#ff6b6b);display:flex;align-items:center;justify-content:center;font-weight:700;color:#0b0b0b;font-size:20px}
+    header h1{margin:0;font-size:20px}
+    header p{margin:0;color:var(--muted);font-size:13px}
+
+    .grid{display:grid;grid-template-columns:2fr 1fr;gap:18px}
+
+    .card{background:var(--card);border-radius:12px;padding:16px;box-shadow:0 6px 20px rgba(2,6,23,0.6);border:1px solid rgba(255,255,255,0.03)}
+
+    /* Left column */
+    .top-row{display:flex;gap:12px;margin-bottom:12px}
+    .panel-photo{flex:1;min-height:300px;border-radius:10px;overflow:hidden;background:var(--glass);display:flex;align-items:center;justify-content:center}
+    .panel-photo img{max-width:100%;height:auto;display:block}
+
+    .stats{width:320px;display:flex;flex-direction:column;gap:10px}
+    .stat{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:12px;border-radius:10px}
+    .stat h3{margin:0;font-size:13px;color:var(--muted)}
+    .stat p{margin:6px 0 0;font-size:20px;font-weight:700}
+
+    .chart-wrap{margin-top:12px}
+
+    /* Right column */
+    .right-col{display:flex;flex-direction:column;gap:12px}
+    .fault-card{border-left:4px solid var(--accent);padding:12px}
+    .report{background:linear-gradient(180deg, rgba(34,197,94,0.06), rgba(34,197,94,0.01));border-left:4px solid var(--accent-2);padding:12px}
+
+    .btn{background:linear-gradient(90deg,var(--accent),#ff6b6b);border:none;padding:10px 14px;border-radius:8px;color:#081220;font-weight:700;cursor:pointer}
+    .muted{color:var(--muted);font-size:13px}
+
+    footer{margin-top:18px;color:var(--muted);font-size:13px;text-align:center}
+
+    @media (max-width:900px){.grid{grid-template-columns:1fr}.stats{width:100%}.top-row{flex-direction:column}.panel-photo{min-height:220px}}
+  </style>
+
+  <!-- Chart.js CDN for the small trend chart -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="logo">SF</div>
+      <div>
+        <h1>SolarFarm — GenAI Fault Dashboard</h1>
+        <p>Realtime monitoring • Image-based fault detection • Automated reports</p>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <button class="btn" id="refreshBtn">Refresh</button>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div>
+        <div class="card top-row">
+          <div class="panel-photo" id="photoCard">
+            <!-- placeholder image -->
+            <img id="panelImage" src="D:\Solar Project\dataset\dusty\dusty_17.jpg" alt="panel">
+          </div>
+
+          <div class="stats">
+            <div class="stat">
+              <h3>System Status</h3>
+              <p id="sysStatus">OK • 98% health</p>
+              <div class="muted" id="lastUpdated">Last updated: --</div>
+            </div>
+
+            <div class="stat">
+              <h3>Detected Fault</h3>
+              <p id="detectedFault">—</p>
+              <div class="muted" id="faultConfidence">Confidence: —</div>
+            </div>
+
+            <div class="stat">
+              <h3>Immediate Action</h3>
+              <p id="actionText">—</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card chart-wrap">
+          <h3 style="margin:0">Power Trend (last hour)</h3>
+          <canvas id="powerChart" height="120"></canvas>
+        </div>
+      </div>
+
+      <aside class="right-col">
+        <div class="card fault-card">
+          <h3 style="margin:0">Panel Diagnostics</h3>
+          <div style="margin-top:8px">
+            <div class="muted">Voltage</div>
+            <div id="voltage">-- V</div>
+            <div class="muted" style="margin-top:8px">Current</div>
+            <div id="current">-- A</div>
+            <div class="muted" style="margin-top:8px">Temperature</div>
+            <div id="temp">-- °C</div>
+            <div class="muted" style="margin-top:8px">Humidity</div>
+            <div id="hum">-- %</div>
+          </div>
+        </div>
+
+        <div class="card report">
+          <h3 style="margin:0">AI Maintenance Report</h3>
+          <div id="reportText" style="margin-top:10px;color:#dff7e3;line-height:1.4">No report generated yet.</div>
+        </div>
+
+        <div class="card">
+          <h3 style="margin:0">Quick Controls</h3>
+          <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" id="triggerClean">Trigger Clean</button>
+            <button class="btn" id="scheduleMaint">Schedule Maintenance</button>
+            <button class="btn" id="downloadReport">Download Report</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      Prototype • GenAI Fault Detection • Built for demo
+    </footer>
+  </div>
+
+  <script>
+    // ---------- MOCK / API FETCH LOGIC ----------
+    // Replace fetchMock() with fetch('/data') when you have a backend
+    async function fetchMock(){
+      // Simulate network delay
+      await new Promise(r=>setTimeout(r,300));
+      // Mocked payload
+      return {
+        timestamp: new Date().toLocaleString(),
+        image: null, // base64 or image url
+        fault: { label: 'Dust', confidence: 0.742 },
+        sensors: { voltage: 17.8, current: 4.3, temp: 42.0, humidity: 65, pressure: 1012 },
+        powerTrend: Array.from({length:12}).map((_,i)=> (18 + Math.sin(i/2)*1.2 + Math.random()*0.3).toFixed(2))
+      }
+    }
+
+    // UI refs
+    const panelImage = document.getElementById('panelImage');
+    const sysStatus = document.getElementById('sysStatus');
+    const lastUpdated = document.getElementById('lastUpdated');
+    const detectedFault = document.getElementById('detectedFault');
+    const faultConfidence = document.getElementById('faultConfidence');
+    const actionText = document.getElementById('actionText');
+    const voltage = document.getElementById('voltage');
+    const current = document.getElementById('current');
+    const temp = document.getElementById('temp');
+    const hum = document.getElementById('hum');
+    const reportText = document.getElementById('reportText');
+    const refreshBtn = document.getElementById('refreshBtn');
+
+    // Chart
+    const ctx = document.getElementById('powerChart').getContext('2d');
+    const powerChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: Array.from({length:12}).map((_,i)=> `${i*5}m`),
+        datasets:[{label:'Power (kW)', data: [], fill:false, tension:0.35, borderColor:'#60a5fa'}]
+      },
+      options:{
+        responsive:true, maintainAspectRatio:false,
+        scales:{y:{beginAtZero:false}}
+      }
+    });
+
+    async function refresh(){
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = 'Refreshing...';
+      try{
+        // swap fetchMock with real fetch('/data') as needed
+        const payload = await fetchMock();
+
+        lastUpdated.textContent = 'Last updated: ' + payload.timestamp;
+        detectedFault.textContent = payload.fault.label;
+        faultConfidence.textContent = `Confidence: ${(payload.fault.confidence*100).toFixed(1)}%`;
+        actionText.textContent = suggestAction(payload.fault.label);
+
+        voltage.textContent = payload.sensors.voltage + ' V';
+        current.textContent = payload.sensors.current + ' A';
+        temp.textContent = payload.sensors.temp + ' °C';
+        hum.textContent = payload.sensors.humidity + ' %';
+
+        // update chart
+        powerChart.data.datasets[0].data = payload.powerTrend;
+        powerChart.update();
+
+        // update image (if base64 provided)
+        if(payload.image){ panelImage.src = payload.image }
+
+        // call LLM-generated report if available (here mocked)
+        reportText.textContent = generateMockReport(payload.fault.label, payload.sensors);
+
+      }catch(err){
+        console.error(err);
+      }finally{
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = 'Refresh';
+      }
+    }
+
+    function suggestAction(label){
+      switch(label.toLowerCase()){
+        case 'dust': return 'Schedule cleaning; high urgency.';
+        case 'crack': return 'Isolate panel and schedule inspection; replace if necessary.';
+        case 'burn': return 'Immediate inspection of junction box; high urgency.';
+        case 'delamination': return 'Tag for replacement; monitor temperature.';
+        default: return 'System operating normally.';
+      }
+    }
+
+    function generateMockReport(label, sensors){
+      if(label.toLowerCase() === 'dust'){
+        return `Dust accumulation detected with confidence ${(0.74*100).toFixed(1)}%. This reduces irradiance and may lower output by 5-15%. Suggested action: deploy cleaning bot for maintenance window and monitor current/voltage for recovery.`
+      }
+      return 'No issues detected.'
+    }
+
+    // Buttons
+    document.getElementById('triggerClean').addEventListener('click', ()=> alert('Cleaning bot triggered (mock).'));
+    document.getElementById('scheduleMaint').addEventListener('click', ()=> alert('Maintenance scheduled (mock).'));
+    document.getElementById('downloadReport').addEventListener('click', ()=>{
+      const blob = new Blob([reportText.textContent], {type:'text/plain;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'solar_report.txt'; a.click(); URL.revokeObjectURL(url);
+    });
+
+    refreshBtn.addEventListener('click', refresh);
+
+    // auto refresh on load
+    refresh();
+  </script>
+</body>
+</html>
