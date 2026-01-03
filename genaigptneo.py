@@ -66,14 +66,25 @@ def detect_fault(image_path):
 # -------------------------
 def generate_report(fault_type, sensor_data):
     prompt = f"""
-You are a solar panel maintenance expert.
+You are an AI solar maintenance assistant.
 
-Detected fault type: {fault_type}.
-Sensor readings: Voltage={sensor_data['Voltage']}V, Current={sensor_data['Current']}A,
-Temperature={sensor_data['Temperature']}°C, Humidity={sensor_data['Humidity']}%, Pressure={sensor_data['Pressure']}hPa.
+Detected fault (from vision model): {fault_type}
+Sensor readings:
+- Voltage: {sensor_data['Voltage']} V
+- Current: {sensor_data['Current']} A
+- Temperature: {sensor_data['Temperature']} °C
+- Humidity: {sensor_data['Humidity']} %
+- Pressure: {sensor_data['Pressure']} hPa
 
-Write a detailed explanation of the solar panel condition, the possible cause of the fault, and clear maintenance recommendations.
+Tasks:
+1. Explain the detected fault in simple technical terms.
+2. Correlate image-based fault with sensor readings.
+3. State severity level (Low / Medium / High).
+4. Give preventive and corrective maintenance actions.
+
+Answer clearly using bullet points.
 """
+
     print("Generating GPT-Neo report...")
     output = generator(
         prompt,
