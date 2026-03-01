@@ -1,0 +1,11 @@
+transformers>=4.35.0
+torch>=2.0.0
+tensorflow>=2.10.0
+PIL>=9.0.0
+numpy>=1.24.0
+accelerate>=0.24.0
+requests>=2.31.0
+Flask>=3.0.0
+Flask-CORS>=4.0.0
+schedule>=1.2.0
+python-dateutil>=2.8.0

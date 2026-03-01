@@ -1,0 +1,214 @@
+
+// ============================================================================
+// INTEGRATION: Add this to esp32.c for Automation Pipeline Support
+// ============================================================================
+
+// Add this at the TOP of esp32.c file (after existing #includes):
+
+#include <HTTPClient.h>
+#include <Wire.h>
+
+/* ================== AUTOMATION SYSTEM CONFIG ================== */
+const char* CONTROL_CENTER_IP = "192.168.1.100";  // ❗ UPDATE THIS WITH YOUR CONTROL CENTER IP
+const int CONTROL_CENTER_PORT = 5000;
+const char* SNAPSHOT_ENDPOINT = "/camera/snapshot";
+const char* UPLOAD_ENDPOINT = "/detection/analyze";
+
+/* ================== CAPTURE SCHEDULING ================== */
+unsigned long lastCaptureTime = 0;
+const unsigned long CAPTURE_INTERVAL = 3600000;  // 1 hour in milliseconds
+uint32_t captureCount = 0;
+
+/* ================== SERVER ENDPOINTS ================== */
+
+// Add this endpoint to serve snapshots to Control Center
+static esp_err_t snapshot_handler(httpd_req_t *req){
+    camera_fb_t * fb = NULL;
+    esp_err_t res = ESP_OK;
+    
+    fb = esp_camera_fb_get();
+    if (!fb) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Camera capture failed");
+        return ESP_FAIL;
+    }
+    
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=snapshot.jpg");
+    
+    if (fb->format == PIXFORMAT_JPEG) {
+        res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
+    } else {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Non-JPEG format");
+        res = ESP_FAIL;
+    }
+    
+    esp_camera_fb_return(fb);
+    
+    Serial.print("[SNAPSHOT] Captured and sent to Control Center (");
+    Serial.print(res == ESP_OK ? "✅" : "❌");
+    Serial.println(")");
+    
+    return res;
+}
+
+// Add URI for snapshot endpoint
+static httpd_uri_t snapshot_uri = {
+    .uri       = "/snapshot",
+    .method    = HTTP_GET,
+    .handler   = snapshot_handler,
+    .user_ctx  = NULL
+};
+
+// ============================================================================
+// AUTO-UPLOAD FUNCTIONS
+// ============================================================================
+
+/* Capture and upload image to Control Center for analysis */
+bool captureAndUploadImage() {
+    camera_fb_t * fb = NULL;
+    
+    Serial.println("[UPLOAD] Capturing image for analysis...");
+    
+    fb = esp_camera_fb_get();
+    if (!fb) {
+        Serial.println("[UPLOAD] ❌ Failed to capture frame");
+        return false;
+    }
+    
+    // Create HTTP client
+    HTTPClient http;
+    String uploadURL = "http://" + String(CONTROL_CENTER_IP) + ":" + String(CONTROL_CENTER_PORT) + UPLOAD_ENDPOINT;
+    
+    Serial.print("[UPLOAD] Uploading to: ");
+    Serial.println(uploadURL);
+    
+    // Start HTTP POST request
+    http.begin(uploadURL);
+    http.addHeader("Content-Type", "image/jpeg");
+    
+    // Send image data
+    int httpResponseCode = http.POST(fb->buf, fb->len);
+    
+    if (httpResponseCode > 0) {
+        String response = http.getString();
+        Serial.print("[UPLOAD] ✅ Response code: ");
+        Serial.println(httpResponseCode);
+        Serial.print("[UPLOAD] Response: ");
+        Serial.println(response);
+    } else {
+        Serial.print("[UPLOAD] ❌ Error code: ");
+        Serial.println(httpResponseCode);
+    }
+    
+    http.end();
+    esp_camera_fb_return(fb);
+    
+    captureCount++;
+    return (httpResponseCode > 0 && httpResponseCode < 300);
+}
+
+/* Send status to Control Center */
+void sendStatusToCenterCenter() {
+    HTTPClient http;
+    String statusURL = "http://" + String(CONTROL_CENTER_IP) + ":" + String(CONTROL_CENTER_PORT) + "/status";
+    
+    http.begin(statusURL);
+    http.addHeader("Content-Type", "application/json");
+    
+    String payload = "{"camera_status":"ready","captures":" + String(captureCount) + "}";
+    int httpResponseCode = http.POST(payload);
+    
+    if (httpResponseCode > 0) {
+        Serial.print("[STATUS] Sent to Control Center (HTTP ");
+        Serial.print(httpResponseCode);
+        Serial.println(")");
+    }
+    
+    http.end();
+}
+
+/* Check Control Center for capture request */
+bool checkForCaptureRequest() {
+    HTTPClient http;
+    String cmdURL = "http://" + String(CONTROL_CENTER_IP) + ":" + String(CONTROL_CENTER_PORT) + "/camera/capture";
+    
+    http.begin(cmdURL);
+    int httpResponseCode = http.GET();
+    
+    bool shouldCapture = (httpResponseCode == 200);
+    
+    if (shouldCapture) {
+        Serial.println("[COMMAND] Received capture request from Control Center");
+    }
+    
+    http.end();
+    return shouldCapture;
+}
+
+// ============================================================================
+// MODIFICATION: Add to your setup() function
+// ============================================================================
+
+void setup() {
+    // ... existing setup code ...
+    
+    // Add this at the end of setup():
+    
+    // Register snapshot endpoint
+    httpd_register_uri_handler(stream_httpd, &snapshot_uri);
+    
+    Serial.println("[AUTOMATION] Camera system ready for automation pipeline");
+    Serial.print("[AUTOMATION] Control Center: ");
+    Serial.print(CONTROL_CENTER_IP);
+    Serial.print(":");
+    Serial.println(CONTROL_CENTER_PORT);
+}
+
+// ============================================================================
+// MODIFICATION: Add this to your loop() function
+// ============================================================================
+
+void loop() {
+    // ... existing loop code ...
+    
+    // Add periodic communications with Control Center
+    unsigned long now = millis();
+    
+    // Send status every 30 seconds
+    static unsigned long lastStatusTime = 0;
+    if (now - lastStatusTime > 30000) {
+        sendStatusToCenterCenter();
+        lastStatusTime = now;
+    }
+    
+    // Check for capture requests from Control Center every 5 seconds
+    static unsigned long lastCommandCheck = 0;
+    if (now - lastCommandCheck > 5000) {
+        if (checkForCaptureRequest()) {
+            captureAndUploadImage();
+        }
+        lastCommandCheck = now;
+    }
+}
+
+// ============================================================================
+// OPTIONAL: Auto-capture on schedule (hourly)
+// ============================================================================
+
+void monitorAutoCapture() {
+    unsigned long now = millis();
+    
+    if (now - lastCaptureTime > CAPTURE_INTERVAL) {
+        Serial.println("[SCHEDULER] Auto-capture triggered");
+        if (captureAndUploadImage()) {
+            Serial.println("[SCHEDULER] ✅ Auto-capture successful");
+        } else {
+            Serial.println("[SCHEDULER] ❌ Auto-capture failed");
+        }
+        lastCaptureTime = now;
+    }
+}
+
+// Add this to loop() as well:
+    monitorAutoCapture();
+
