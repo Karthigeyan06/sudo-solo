@@ -1,0 +1,239 @@
+
+// ============================================================================
+// INTEGRATION: Add this to device.cpp for Automation Pipeline Support
+// ============================================================================
+
+// Add this at the TOP of device.cpp file (after existing #includes):
+
+#include <WiFiClient.h>
+#include <vector>
+
+/* ================== AUTOMATION SYSTEM CONFIG ================== */
+const char* CONTROL_CENTER_IP = "192.168.1.100";  // ❗ UPDATE THIS WITH YOUR CONTROL CENTER IP
+const uint16_t CONTROL_CENTER_PORT = 5001;
+
+/* ================== CONTROL CLIENT ================== */
+WiFiClient automationClient;
+bool automationConnected = false;
+unsigned long lastAutomationReconnect = 0;
+const unsigned long AUTOMATION_RECONNECT_INTERVAL = 5000;  // Try every 5 seconds
+
+/* ================== AUTONOMOUS MODE CLEANING ================== */
+bool isCleaningActive = false;
+unsigned long cleaningStartTime = 0;
+unsigned long cleaningDuration = 120000;  // 2 minutes in milliseconds
+
+/* ================== FUNCTION DEFINITIONS ================== */
+
+/* Connect to Automation Control Center */
+void connectToAutomationCenter() {
+    if (automationConnected) return;
+    
+    Serial.print("[AUTOMATION] Connecting to Control Center at ");
+    Serial.print(CONTROL_CENTER_IP);
+    Serial.print(":");
+    Serial.println(CONTROL_CENTER_PORT);
+    
+    if (automationClient.connect(CONTROL_CENTER_IP, CONTROL_CENTER_PORT)) {
+        automationConnected = true;
+        Serial.println("[AUTOMATION] ✅ Connected to Control Center!");
+        automationClient.println("STATUS:CONNECTED");
+    } else {
+        automationConnected = false;
+        Serial.println("[AUTOMATION] ❌ Failed to connect to Control Center");
+    }
+}
+
+/* Disconnect from Automation Control Center */
+void disconnectFromAutomationCenter() {
+    if (automationClient.connected()) {
+        automationClient.stop();
+        automationConnected = false;
+        Serial.println("[AUTOMATION] Disconnected from Control Center");
+    }
+}
+
+/* Handle commands from Automation System */
+void handleAutomationCommands() {
+    if (!automationClient.available()) return;
+    
+    String command = automationClient.readStringUntil('
+');
+    command.trim();
+    
+    Serial.print("[AUTOMATION] Received command: ");
+    Serial.println(command);
+    
+    if (command == "F") {
+        moveForward();
+    } 
+    else if (command == "B") {
+        moveBackward();
+    } 
+    else if (command == "S") {
+        stopMotor();
+    } 
+    else if (command == "START_CLEANING") {
+        startCleaningCycle();
+    } 
+    else if (command == "STOP_CLEANING") {
+        stopCleaningCycle();
+    }
+    else if (command == "STATUS") {
+        automationClient.println("STATUS:READY");
+    }
+    else if (command == "PING") {
+        automationClient.println("PONG");
+    }
+}
+
+/* Start cleaning cycle (autonomous cleaning) */
+void startCleaningCycle() {
+    if (currentMode != AUTONOMOUS_MODE) {
+        Serial.println("[CLEANING] ❌ Not in autonomous mode!");
+        return;
+    }
+    
+    if (isCleaningActive) {
+        Serial.println("[CLEANING] ⚠️  Cleaning already in progress");
+        return;
+    }
+    
+    Serial.println("[CLEANING] 🧹 Starting cleaning cycle...");
+    Serial.println("[CLEANING] Enabling brush motor and moving forward");
+    
+    isCleaningActive = true;
+    cleaningStartTime = millis();
+    
+    // Move forward to perform cleaning
+    moveForward();
+    
+    // Enable brush motor (assuming GPIO pin for brush)
+    // digitalWrite(BRUSH_MOTOR_PIN, HIGH);  // Uncomment if you have brush motor
+    
+    automationClient.println("STATUS:CLEANING_STARTED");
+}
+
+/* Stop cleaning cycle */
+void stopCleaningCycle() {
+    if (!isCleaningActive) {
+        Serial.println("[CLEANING] ⚠️  No cleaning in progress");
+        return;
+    }
+    
+    Serial.println("[CLEANING] 🛑 Stopping cleaning cycle");
+    
+    // Stop motors
+    stopMotor();
+    
+    // Disable brush motor if enabled
+    // digitalWrite(BRUSH_MOTOR_PIN, LOW);  // Uncomment if you have brush motor
+    
+    isCleaningActive = false;
+    automationClient.println("STATUS:CLEANING_STOPPED");
+}
+
+/* Monitor cleaning duration and auto-stop */
+void monitorCleaningCycle() {
+    if (!isCleaningActive) return;
+    
+    unsigned long elapsed = millis() - cleaningStartTime;
+    
+    if (elapsed >= cleaningDuration) {
+        Serial.print("[CLEANING] Duration reached (");
+        Serial.print(elapsed / 1000);
+        Serial.println("s), stopping cleaning");
+        stopCleaningCycle();
+    }
+}
+
+/* Maintain Automation connection */
+void maintainAutomationConnection() {
+    if (currentMode == AUTONOMOUS_MODE) {
+        if (!automationConnected || !automationClient.connected()) {
+            if (millis() - lastAutomationReconnect > AUTOMATION_RECONNECT_INTERVAL) {
+                connectToAutomationCenter();
+                lastAutomationReconnect = millis();
+            }
+        } else {
+            handleAutomationCommands();
+        }
+    }
+}
+
+// ============================================================================
+// MODIFICATION: Add this to your existing setup() function
+// ============================================================================
+
+void setup() {
+    // ... existing setup code ...
+    
+    // Add this at the end of setup():
+    if (currentMode == AUTONOMOUS_MODE) {
+        Serial.println("[AUTOMATION] System in AUTONOMOUS mode - enabling Control Center connection");
+        connectToAutomationCenter();
+    }
+}
+
+// ============================================================================
+// MODIFICATION: Update your existing loop() function
+// ============================================================================
+
+void loop() {
+    if (currentMode == CONTROLLER_MODE) {
+        Blynk.run();
+    } 
+    else {
+        // AUTONOMOUS MODE
+        maintainAutomationConnection();
+        handleAutonomousMode();
+        monitorCleaningCycle();
+    }
+    
+    blinkPowerLED();
+}
+
+// ============================================================================
+// OPTIONAL: Update mode switch handler for better integration
+// ============================================================================
+
+// Replace existing BLYNK_WRITE(V5) with this:
+BLYNK_WRITE(V5) {
+    if (param.asInt() == 0) {
+        currentMode = CONTROLLER_MODE;
+        Serial.println("Switched to CONTROLLER MODE");
+        
+        if (automationClient.connected()) {
+            disconnectFromAutomationCenter();
+        }
+        if (controlClient.connected()) {
+            controlClient.stop();
+        }
+    }
+    else {
+        currentMode = AUTONOMOUS_MODE;
+        Serial.println("Switched to AUTONOMOUS MODE");
+        connectToAutomationCenter();
+    }
+}
+
+// ============================================================================
+// OPTIONAL: Add this function to enable/disable brush motor (if available)
+// ============================================================================
+
+#define BRUSH_MOTOR_PIN 12  // Adjust pin number as needed
+
+void enableBrushMotor() {
+    digitalWrite(BRUSH_MOTOR_PIN, HIGH);
+    Serial.println("[BRUSH] Motor enabled");
+}
+
+void disableBrushMotor() {
+    digitalWrite(BRUSH_MOTOR_PIN, LOW);
+    Serial.println("[BRUSH] Motor disabled");
+}
+
+// Uncomment this in setup() if using brush motor:
+// pinMode(BRUSH_MOTOR_PIN, OUTPUT);
+// disableBrushMotor();  // Start disabled
+
